@@ -1,6 +1,6 @@
 <div align="center">
 
-# 💊 feature-retcon · 后悔药
+# 💊 feature-retcon · 后悔药.SKILL
 
 ### 功能做到一半，需求变了？别在旧答案上继续打补丁。
 
