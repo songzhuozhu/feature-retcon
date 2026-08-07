@@ -1,0 +1,41 @@
+name: ClawHub Publish
+
+on:
+  pull_request:
+    paths:
+      - "SKILL.md"
+      - "references/**"
+      - "scripts/contract.py"
+      - "assets/RECONCILIATION.md"
+      - ".clawhubignore"
+      - ".github/workflows/clawhub-publish.yml"
+  workflow_dispatch:
+    inputs:
+      confirm_mit0:
+        description: "I confirm this skill release will be distributed by ClawHub under MIT-0"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  dry-run:
+    if: github.event_name == 'pull_request'
+    uses: openclaw/clawhub/.github/workflows/skill-publish.yml@v1
+    with:
+      skill_path: .
+      owner: songzhuozhu
+      dry_run: true
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && inputs.confirm_mit0 == true
+    uses: openclaw/clawhub/.github/workflows/skill-publish.yml@v1
+    with:
+      skill_path: .
+      owner: songzhuozhu
+      dry_run: false
+    secrets:
+      clawhub_token: ${{ secrets.CLAWHUB_TOKEN }}

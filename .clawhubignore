@@ -1,0 +1,20 @@
+# Publish only the files required to execute the skill.
+.git/
+.github/
+.clawhub/
+.DS_Store
+
+# Repository-facing documentation and development fixtures.
+README.md
+README_EN.md
+CONTRIBUTING.md
+SECURITY.md
+CHANGELOG.md
+LICENSE
+agents/
+tests/
+
+# Marketing assets and the development-only renderer.
+assets/feature-retcon-demo-*.gif
+assets/social-preview.png
+scripts/render_demo.py

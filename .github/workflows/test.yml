@@ -1,0 +1,28 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.9", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Validate skill package
+        run: python -m unittest tests.test_contract.PackageTests -v
+      - name: Run safety and fault-injection tests
+        run: python -m unittest tests.test_contract.ContractCliTests -v
+      - name: Check CLI
+        run: python scripts/contract.py --help

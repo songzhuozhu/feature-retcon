@@ -1,0 +1,7 @@
+interface:
+  display_name: "后悔药"
+  short_description: "安全评估功能变更，并将权威规格、任务与实现追平到指定阶段"
+  default_prompt: "使用 $feature-retcon 评估这次功能变更，并在我确认后追平到指定阶段。"
+
+policy:
+  allow_implicit_invocation: false

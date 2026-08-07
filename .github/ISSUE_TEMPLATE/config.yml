@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: "🔒 私下报告安全漏洞 / Private security report"
+    url: "https://github.com/songzhuozhu/feature-retcon/security/advisories/new"
+    about: "未授权写入、路径逃逸、敏感信息泄漏和恢复破坏必须通过 Security Advisory 报告。"

@@ -1,0 +1,62 @@
+name: "✨ 功能建议 / Feature request"
+description: "提出能增强 retcon 工作流且不削弱安全门禁的改进"
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        好的建议先说明问题，再说明为什么现有边界无法优雅解决。请不要提交真实业务规格或内部仓库材料。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 要解决的问题
+      description: "谁在什么 retcon 场景下遇到了什么阻碍？"
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: 期望结果
+      description: "描述可观察的结果，不必预设实现。"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: stage
+    attributes:
+      label: 主要影响阶段
+      multiple: true
+      options:
+        - requirements
+        - design
+        - tasks
+        - implementation
+        - validation
+        - recovery / distribution
+    validations:
+      required: true
+
+  - type: textarea
+    id: invariants
+    attributes:
+      label: 必须保持的安全不变量
+      description: "例如第一次调用只读、写前登记、范围扩张重新确认、零未解释残留。"
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 已考虑的替代方案
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: 贡献意愿
+      options:
+        - label: "我愿意提供不含私有材料的最小合成案例。"
+

@@ -1,0 +1,84 @@
+name: "🐛 缺陷 / Bug report"
+description: "报告可复现的错误或安全边界之外的普通缺陷"
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢提供最小复现。若问题涉及未授权写入、路径逃逸、敏感信息泄漏或恢复破坏，请不要继续填写，改用 Security Advisory 私下报告。
+
+  - type: checkboxes
+    id: security-check
+    attributes:
+      label: 安全确认
+      options:
+        - label: "这不是应当私下报告的安全漏洞。"
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: feature-retcon 版本
+      placeholder: "v0.1.0 或 commit SHA"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: host
+    attributes:
+      label: Agent 宿主
+      options:
+        - Codex
+        - Claude Code
+        - Cursor
+        - OpenCode
+        - Gemini CLI
+        - GitHub Copilot
+        - OpenClaw
+        - 其他 / Other
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: 环境
+      description: "操作系统、Python 版本、安装方式"
+      placeholder: "macOS 15, Python 3.12, npx skills add"
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 最小合成复现
+      description: "请使用从零构造的中性仓库，不要粘贴私有代码、规格或凭证。"
+      placeholder: |
+        1. 创建……
+        2. 调用……
+        3. 观察到……
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果与脱敏日志
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: 补充上下文
+      description: "当前追平水位、契约状态、工作树状态或其他有助于复现的信息。"
+
