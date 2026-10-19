@@ -681,6 +681,7 @@ class PackageTests(unittest.TestCase):
             "assets/feature-retcon-demo-*.gif",
             "assets/social-preview.png",
             "agents/",
+            "clawhub-source/",
         ):
             self.assertIn(excluded, ignore)
         self.assertNotIn("scripts/contract.py", ignore)

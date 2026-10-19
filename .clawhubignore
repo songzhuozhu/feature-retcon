@@ -3,6 +3,8 @@
 .github/
 .clawhub/
 .DS_Store
+# Upstream reusable workflow checks its CLI source out inside this repository.
+clawhub-source/
 
 # Repository-facing documentation and development fixtures.
 README.md
