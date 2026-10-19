@@ -21,10 +21,11 @@
 评估（无文件）
   → 用户确认
   → executing
+  → paused ↔ executing（同一轮次分段推进）
   → blocked ↔ executing
-  → restoring → ready_to_close
-  → 或 executing → ready_to_close
-  → Skill 复核并删除契约
+  → restoring → restored → 复验恢复证据 → ready_to_close
+  → 或 executing → 复验完成证据 → ready_to_close
+  → close 重新核验并删除契约
 ```
 
 文件存在表示轮次未结束；不存在表示没有活动轮次。不得归档已完成契约，也不得保留 `completed` 状态。
@@ -35,11 +36,12 @@
 
 | 字段 | 含义 |
 |---|---|
-| `schema_version` | 契约结构版本，当前为整数 `1` |
+| `schema_version` | 契约结构版本，当前为整数 `1`；新增关闭字段向后兼容读取和恢复 |
 | `round_id` | 本轮唯一标识 |
-| `status` | `executing`、`blocked`、`restoring`、`ready_to_close` |
+| `status` | `executing`、`paused`、`blocked`、`restoring`、`restored`、`ready_to_close` |
 | `authority_root` | 权威根绝对路径 |
-| `target_stage` | `requirements`、`design`、`tasks`、`implementation`、`validation` |
+| `target_stage` | 本次执行上限：`requirements`、`design`、`tasks`、`implementation`、`validation` |
+| `completion_stage` | 整轮闭环终点，不浅于执行上限；缺失或 `null` 时允许读取和恢复，但禁止正常关闭 |
 | `created_at` | 契约创建时间 |
 | `confirmed_at` | 用户执行确认时间 |
 | `version_control` | `git` 或 `none` |
@@ -54,6 +56,7 @@
 ```bash
 python3 scripts/contract.py init <authority-root> \
   --target-stage <stage> \
+  --completion-stage <stage> \
   --version-control <git|none> \
   [--baseline-ref <ref>] \
   --writable-root <root>
@@ -63,12 +66,18 @@ python3 scripts/contract.py prepare <contract> --path <file> \
   [--allow-sensitive] [--allow-large]
 
 python3 scripts/contract.py applied <contract> --path <file>
-python3 scripts/contract.py status <contract> [--set <executing|blocked|restoring>]
+python3 scripts/contract.py status <contract> [--set <executing|paused|blocked|restoring>]
+python3 scripts/contract.py scope <contract> --target-stage <stage> \
+  [--completion-stage <stage>] [--writable-root <root>] --confirmation <用户确认原文或定位>
 python3 scripts/contract.py restore <contract>
-python3 scripts/contract.py verify <contract> [--mark-ready]
+python3 scripts/contract.py verify <contract>
+python3 scripts/contract.py verify <contract> --mark-ready --evidence <closing-evidence.json>
+python3 scripts/contract.py close <contract>
 ```
 
 `--allow-sensitive`、`--allow-large` 和 `recovery-mode=git` 只能反映契约中已经记录的用户选择，命令行开关本身不构成授权。
+
+`scope` 只记录已有确认，不产生授权。它保留 `round_id`、基线和全部恢复日志；暂停的契约还需显式恢复 `executing`。闭环终点不能降低；新可写根重新确认后用可重复的 `--writable-root` 追加，不能移除有恢复日志的原根。
 
 ## 写前协议
 
@@ -111,25 +120,33 @@ python3 scripts/contract.py verify <contract> [--mark-ready]
 
 继续未完成轮次前运行 `status` 和 `verify`，阅读契约中的变更断言、进度和阻塞。只有解决阻塞或重新确认边界后，才把状态从 `blocked` 改回 `executing`。
 
-停止轮次时：
+阶段性暂停、交接或等待下一次授权时，将状态设为 `paused`，记录完成水位、剩余工作和下次所需授权。保留契约，不运行恢复，不创建替代轮次。
+
+只有用户明确要求撤销本轮修改时：
 
 1. 运行 `restore`，让脚本逆序恢复。
 2. 运行 `verify`，确认日志链与前态一致。
 3. 重新运行基线验证，检查活跃引用没有停在中间状态。
 4. 确认契约没有尚未恢复的独有要求。
-5. 显式删除契约。
+5. 提供 `outcome=restored` 的关闭证据，运行 `verify --mark-ready --evidence` 和 `close`。
+
+`restore` 完成后状态为 `restored`，仅代表文件已恢复；它不能证明验证基线和引用已经复验。
 
 漂移、缺失 Git 对象、损坏载荷或基线验证失败都保持阻塞，不得通过删除契约绕过。
 
 ## 正常关闭
 
-脚本只在状态为 `executing` 且机械校验通过时接受 `verify --mark-ready`。`blocked` 必须先解决阻塞并通过显式状态迁移回到 `executing`，不能直接关闭。这仍不证明语义已经完成；Skill 还需逐项证明：
+`verify` 的 `valid` 仅表示 schema、日志链、文件哈希、权限和 Git 状态一致。正常关闭要求执行上限已达到闭环终点、状态为 `executing`、独立关闭证据属于同一轮次且没有剩余工作。`blocked` 必须先解决阻塞；`paused` 不能关闭。Skill 逐项证明：
 
 - 断言已吸收。
-- 阶段门槛通过。
+- 闭环终点及全部上游阶段门槛通过，必要检查没有 NotRun 或未解释失败。
 - 零未解释残留。
 - 水位已更新。
 - 契约未被 Git 跟踪。
 - 契约没有独有有效要求。
 
-全部成立后显式删除契约。删除是完成标志，不能交给脚本自动执行。
+按 [closure-evidence.md](closure-evidence.md) 提供证据后运行 `verify --mark-ready --evidence`。脚本登记契约指纹和证据哈希；`close` 重新检查当前文件、契约和证据后才删除契约。两个命令分开执行，任一失败都保留契约，不用 `rm`、`unlink` 或补丁绕过。状态查询不是关闭许可。
+
+旧契约缺少 `completion_stage` 时，依据原始确认用 `scope` 补齐，不猜测、更不删除重建。旧版 `ready_to_close` 没有证据登记时不能关闭：尚未恢复的轮次先转回 `executing`，补齐终点和证据；需要恢复的轮次转为 `restoring` 后继续 `restore`。保留旧恢复日志。
+
+脚本检查结构、证据存在性和漂移，不能证明自然语言结论真实，也不能阻止绕过脚本直接删除文件。Agent 仍须阅读逐项证据，完成整个闭环复核。

@@ -40,12 +40,13 @@ class ContractCliTests(unittest.TestCase):
         )
         return result
 
-    def init_contract(self, *, version_control: str = "none", baseline_ref: str | None = None) -> Path:
+    def init_contract(self, *, version_control: str = "none", baseline_ref: str | None = None,
+                      target_stage: str = "implementation", completion_stage: str | None = "implementation") -> Path:
         arguments = [
             "init",
             str(self.root),
             "--target-stage",
-            "implementation",
+            target_stage,
             "--version-control",
             version_control,
             "--writable-root",
@@ -53,6 +54,8 @@ class ContractCliTests(unittest.TestCase):
         ]
         if baseline_ref:
             arguments.extend(["--baseline-ref", baseline_ref])
+        if completion_stage:
+            arguments.extend(["--completion-stage", completion_stage])
         self.run_cli(*arguments)
         return self.root / "RECONCILIATION.md"
 
@@ -95,7 +98,7 @@ class ContractCliTests(unittest.TestCase):
         self.assertTrue(verified["valid"])
 
         restored = json.loads(self.run_cli("restore", str(contract)).stdout)
-        self.assertEqual("ready_to_close", restored["status"])
+        self.assertEqual("restored", restored["status"])
         self.assertEqual("old\n", target.read_text(encoding="utf-8"))
         self.assertTrue(json.loads(self.run_cli("verify", str(contract)).stdout)["valid"])
 
@@ -111,7 +114,7 @@ class ContractCliTests(unittest.TestCase):
         target.write_text("old\n", encoding="utf-8")
         restored = json.loads(self.run_cli("restore", str(contract)).stdout)
 
-        self.assertEqual("ready_to_close", restored["status"])
+        self.assertEqual("restored", restored["status"])
         self.assertEqual("old\n", target.read_text(encoding="utf-8"))
         self.assertTrue(json.loads(self.run_cli("verify", str(contract)).stdout)["valid"])
 
@@ -436,6 +439,162 @@ class ContractCliTests(unittest.TestCase):
         result = self.run_cli("verify", str(contract), "--mark-ready", expect=2)
         self.assertIn("机械校验未通过", result.stderr)
 
+    def closing_evidence(self, contract: Path, stage: str = "implementation", outcome: str = "completed") -> Path:
+        round_id = json.loads(self.run_cli("status", str(contract)).stdout)["round_id"]
+        report = self.root / "verification.md"
+        report.write_text("Current assertions, stage checks and residual scan passed.\n", encoding="utf-8")
+        stages = ["requirements", "design", "tasks", "implementation", "validation"]
+        checks = stages[:stages.index(stage) + 1] + ["residuals", "watermark", "absorption"]
+        if outcome == "restored":
+            checks = ["baseline", "references", "absorption"]
+        evidence = {
+            "round_id": round_id, "outcome": outcome, "completed_stage": stage, "remaining_work": [],
+            "checks": {key: {"result": "pass", "evidence": [str(report)]} for key in checks},
+        }
+        path = self.root / "closing-evidence.json"
+        path.write_text(json.dumps(evidence), encoding="utf-8")
+        return path
+
+    def test_design_checkpoint_keeps_contract_until_implementation(self) -> None:
+        contract = self.init_contract(target_stage="design")
+        # Reproduce the incident: every Markdown checkbox was ticked before deletion.
+        contract.write_text(contract.read_text().replace("- [ ]", "- [x]"))
+        evidence = self.closing_evidence(contract)
+        result = self.run_cli("verify", str(contract), "--mark-ready", "--evidence", str(evidence), expect=2)
+        self.assertIn("尚未到闭环终点", result.stderr)
+        self.run_cli("close", str(contract), expect=2)
+        self.run_cli("status", str(contract), "--set", "paused")
+        self.assertTrue(contract.exists())
+        self.assertTrue(json.loads(self.run_cli("verify", str(contract)).stdout)["valid"])
+
+    def test_mechanical_valid_without_evidence_cannot_close(self) -> None:
+        contract = self.init_contract()
+        result = json.loads(self.run_cli("verify", str(contract)).stdout)
+        self.assertTrue(result["valid"])
+        self.assertFalse(result["close_ready"])
+        self.run_cli("verify", str(contract), "--mark-ready", expect=2)
+        self.run_cli("close", str(contract), expect=2)
+        self.assertTrue(contract.exists())
+
+    def test_resume_preserves_round_and_original_recovery(self) -> None:
+        target = self.root / "spec.md"
+        target.write_text("original\n")
+        contract = self.init_contract(target_stage="design")
+        original_id = json.loads(self.run_cli("status", str(contract)).stdout)["round_id"]
+        self.run_cli("prepare", str(contract), "--path", str(target))
+        target.write_text("design updated\n")
+        self.run_cli("applied", str(contract), "--path", str(target))
+        journal = self.read_journal(contract)
+        self.run_cli("status", str(contract), "--set", "paused")
+        self.run_cli("scope", str(contract), "--target-stage", "implementation", "--confirmation", "user: continue implementation")
+        self.run_cli("status", str(contract), "--set", "executing")
+        status = json.loads(self.run_cli("status", str(contract)).stdout)
+        self.assertEqual(original_id, status["round_id"])
+        self.assertEqual(journal["entries"], self.read_journal(contract)["entries"])
+        self.run_cli("prepare", str(contract), "--path", str(target))
+        target.write_text("implementation updated\n")
+        self.run_cli("applied", str(contract), "--path", str(target))
+        self.run_cli("restore", str(contract))
+        self.assertEqual("original\n", target.read_text())
+
+    def test_scope_cannot_lower_completion_to_force_close(self) -> None:
+        contract = self.init_contract(target_stage="design")
+        before = contract.read_bytes()
+        self.run_cli("scope", str(contract), "--target-stage", "design", "--completion-stage", "design",
+                     "--confirmation", "finish design", expect=2)
+        self.assertEqual(before, contract.read_bytes())
+
+    def test_resume_can_add_confirmed_code_root_without_replacing_journal(self) -> None:
+        contract = self.init_contract(target_stage="design")
+        with tempfile.TemporaryDirectory() as code_dir:
+            target = Path(code_dir).resolve() / "code.py"
+            self.run_cli("prepare", str(contract), "--path", str(target), expect=2)
+            self.run_cli("scope", str(contract), "--target-stage", "implementation", "--writable-root", code_dir,
+                         "--confirmation", "user authorized code root")
+            self.run_cli("prepare", str(contract), "--path", str(target))
+            target.write_text("new implementation\n")
+            self.run_cli("applied", str(contract), "--path", str(target))
+            self.run_cli("restore", str(contract))
+            self.assertFalse(target.exists())
+
+    def test_old_contract_requires_explicit_completion_boundary(self) -> None:
+        contract = self.init_contract(completion_stage=None)
+        # Old v1 contracts lack this field entirely; recovery remains compatible.
+        contract.write_text(contract.read_text().replace("completion_stage: null\n", ""))
+        evidence = self.closing_evidence(contract)
+        self.assertTrue(json.loads(self.run_cli("verify", str(contract)).stdout)["valid"])
+        self.run_cli("verify", str(contract), "--mark-ready", "--evidence", str(evidence), expect=2)
+        self.run_cli("scope", str(contract), "--target-stage", "implementation", "--completion-stage", "implementation",
+                     "--confirmation", "original user confirmation covers implementation")
+        self.run_cli("verify", str(contract), "--mark-ready", "--evidence", str(evidence))
+        self.run_cli("close", str(contract))
+        self.assertFalse(contract.exists())
+
+    def test_ready_status_without_certificate_cannot_close(self) -> None:
+        contract = self.init_contract()
+        contract.write_text(contract.read_text().replace("status: executing", 'status: "ready_to_close"'))
+        result = json.loads(self.run_cli("verify", str(contract)).stdout)
+        self.assertFalse(result["close_ready"])
+        self.run_cli("close", str(contract), expect=2)
+        self.assertTrue(contract.exists())
+
+    def test_incomplete_or_foreign_closing_evidence_is_rejected(self) -> None:
+        contract = self.init_contract()
+        evidence = self.closing_evidence(contract)
+        original = json.loads(evidence.read_text())
+        for mutate in (
+            lambda value: value.update(remaining_work=["code still stale"]),
+            lambda value: value.update(round_id="another-round"),
+            lambda value: value.update(completed_stage="design"),
+            lambda value: value["checks"].pop("implementation"),
+            lambda value: value["checks"]["implementation"].update(result="NotRun"),
+            lambda value: value["checks"]["implementation"].update(evidence=[]),
+            lambda value: value["checks"]["implementation"].update(evidence=[str(self.root / "missing.md")]),
+            lambda value: value["checks"].update(regression={"result": "NotRun", "evidence": []}),
+        ):
+            with self.subTest(mutate=mutate):
+                value = json.loads(json.dumps(original))
+                mutate(value)
+                evidence.write_text(json.dumps(value))
+                self.run_cli("verify", str(contract), "--mark-ready", "--evidence", str(evidence), expect=2)
+                self.assertTrue(contract.exists())
+
+    def test_proven_document_only_round_can_close(self) -> None:
+        contract = self.init_contract(target_stage="design", completion_stage="design")
+        evidence = self.closing_evidence(contract, stage="design")
+        result = json.loads(self.run_cli("verify", str(contract), "--mark-ready", "--evidence", str(evidence)).stdout)
+        self.assertTrue(result["close_ready"])
+        self.run_cli("close", str(contract))
+        self.assertFalse(contract.exists())
+        self.assertTrue(evidence.exists())
+
+    def test_close_rechecks_changed_evidence_and_contract(self) -> None:
+        for changed in ("report", "evidence", "contract", "target"):
+            with self.subTest(changed=changed):
+                contract = self.init_contract()
+                target = self.root / "spec.md"
+                self.run_cli("prepare", str(contract), "--path", str(target))
+                target.write_text("Current specification\n")
+                self.run_cli("applied", str(contract), "--path", str(target))
+                evidence = self.closing_evidence(contract)
+                self.run_cli("verify", str(contract), "--mark-ready", "--evidence", str(evidence))
+                path = {"report": self.root / "verification.md", "evidence": evidence,
+                        "contract": contract, "target": target}[changed]
+                path.write_text(path.read_text() + "\nChanged after validation\n")
+                self.run_cli("close", str(contract), expect=2)
+                self.assertTrue(contract.exists())
+                contract.unlink()
+
+    def test_restore_requires_baseline_evidence_before_close(self) -> None:
+        contract = self.init_contract()
+        self.run_cli("restore", str(contract))
+        self.run_cli("close", str(contract), expect=2)
+        self.run_cli("verify", str(contract), "--mark-ready", expect=2)
+        evidence = self.closing_evidence(contract, outcome="restored")
+        self.run_cli("verify", str(contract), "--mark-ready", "--evidence", str(evidence))
+        self.run_cli("close", str(contract))
+        self.assertFalse(contract.exists())
+
 
 class PackageTests(unittest.TestCase):
     def test_skill_metadata_is_user_invoked(self) -> None:
@@ -538,6 +697,11 @@ class PackageTests(unittest.TestCase):
         self.assertIn("dry_run: true", workflow)
         self.assertIn("dry_run: false", workflow)
         self.assertIn("clawhub_token: ${{ secrets.CLAWHUB_TOKEN }}", workflow)
+        references = re.findall(r"uses: openclaw/clawhub/\.github/workflows/skill-publish\.yml@(\S+)", workflow)
+        self.assertEqual(2, len(references))
+        for reference in references:
+            self.assertRegex(reference, r"^[0-9a-f]{40}$")
+        self.assertIn("inputs.dry_run == false && inputs.confirm_mit0 == true", workflow)
 
     def test_release_community_files_and_social_preview_are_ready(self) -> None:
         security = (REPO_ROOT / "SECURITY.md").read_text(encoding="utf-8")

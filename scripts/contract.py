@@ -26,13 +26,15 @@ JOURNAL_BEGIN = "<!-- feature-retcon:journal:begin -->"
 JOURNAL_END = "<!-- feature-retcon:journal:end -->"
 MAX_EMBEDDED_PAYLOAD = 10 * 1024 * 1024
 STAGES = ("requirements", "design", "tasks", "implementation", "validation")
-STATUSES = ("executing", "blocked", "restoring", "ready_to_close")
+STATUSES = ("executing", "paused", "blocked", "restoring", "restored", "ready_to_close")
 ENTRY_STATUSES = ("prepared", "applied", "restored")
 STATUS_TRANSITIONS = {
-    "executing": {"blocked", "restoring"},
+    "executing": {"paused", "blocked", "restoring"},
+    "paused": {"executing", "blocked", "restoring"},
     "blocked": {"executing", "restoring"},
-    "restoring": {"blocked", "ready_to_close"},
-    "ready_to_close": set(),
+    "restoring": {"blocked"},
+    "restored": {"blocked", "restoring"},
+    "ready_to_close": {"executing", "blocked", "restoring"},
 }
 
 SENSITIVE_NAME_PATTERNS = (
@@ -323,6 +325,13 @@ def require_schema(frontmatter: dict[str, object], journal: dict[str, object]) -
         raise ContractError(f"仅支持 schema_version: {SCHEMA_VERSION}")
     if frontmatter.get("status") not in STATUSES:
         raise ContractError("契约 status 非法")
+    if frontmatter.get("target_stage") not in STAGES:
+        raise ContractError("契约 target_stage 非法")
+    completion = frontmatter.get("completion_stage")
+    if completion is not None and (
+        completion not in STAGES or STAGES.index(completion) < STAGES.index(frontmatter["target_stage"])
+    ):
+        raise ContractError("completion_stage 必须覆盖 target_stage")
     if journal.get("journal_version") != 1:
         raise ContractError("恢复日志版本不受支持")
     roots = journal.get("writable_roots")
@@ -399,6 +408,8 @@ def expected_current(entries: list[dict[str, object]]) -> dict[str, object]:
 
 
 def cmd_init(args: argparse.Namespace) -> dict[str, object]:
+    if args.completion_stage and STAGES.index(args.completion_stage) < STAGES.index(args.target_stage):
+        raise ContractError("completion_stage 必须覆盖 target_stage")
     authority_root = Path(args.authority_root).expanduser().resolve()
     if not authority_root.is_dir():
         raise ContractError(f"权威根不存在：{authority_root}")
@@ -438,6 +449,7 @@ def cmd_init(args: argparse.Namespace) -> dict[str, object]:
         "{{ROUND_ID}}": json_scalar(args.round_id or str(uuid.uuid4())),
         "{{AUTHORITY_ROOT}}": json_scalar(str(authority_root)),
         "{{TARGET_STAGE}}": json_scalar(args.target_stage),
+        "{{COMPLETION_STAGE}}": json_scalar(args.completion_stage),
         "{{CREATED_AT}}": json_scalar(created_at),
         "{{CONFIRMED_AT}}": json_scalar(args.confirmed_at or created_at),
         "{{VERSION_CONTROL}}": json_scalar(args.version_control),
@@ -571,8 +583,45 @@ def cmd_status(args: argparse.Namespace) -> dict[str, object]:
         "round_id": frontmatter.get("round_id"),
         "status": frontmatter.get("status"),
         "target_stage": frontmatter.get("target_stage"),
+        "completion_stage": frontmatter.get("completion_stage"),
+        "closure_recorded": bool(journal.get("closure")),
         "entries": counts,
     }
+
+
+def cmd_scope(args: argparse.Namespace) -> dict[str, object]:
+    contract, text, frontmatter, journal = load_contract(args.contract)
+    require_schema(frontmatter, journal)
+    if frontmatter["status"] not in {"executing", "paused", "blocked"}:
+        raise ContractError("当前状态不能调整执行边界")
+    completion = args.completion_stage or frontmatter.get("completion_stage")
+    if completion not in STAGES or STAGES.index(completion) < STAGES.index(args.target_stage):
+        raise ContractError("必须明确覆盖执行上限的 completion_stage")
+    previous = frontmatter.get("completion_stage")
+    if previous and STAGES.index(completion) < STAGES.index(previous):
+        raise ContractError("不能降低原轮次的闭环终点；保留契约并处理剩余工作或恢复")
+    if not args.confirmation.strip():
+        raise ContractError("需要用户确认的原文或定位")
+    roots = list(journal["writable_roots"])
+    added_roots: list[str] = []
+    for root_arg in args.writable_root or []:
+        root = Path(root_arg).expanduser().resolve()
+        if not root.is_dir():
+            raise ContractError(f"可写工作根不存在：{root}")
+        if str(root) not in roots:
+            roots.append(str(root))
+            added_roots.append(str(root))
+    journal.setdefault("scope_changes", []).append({
+        "at": now_iso(), "confirmation": args.confirmation,
+        "previous_target": frontmatter["target_stage"], "target_stage": args.target_stage,
+        "previous_completion": previous, "completion_stage": completion,
+        "added_writable_roots": added_roots,
+    })
+    journal["writable_roots"] = roots
+    text = set_frontmatter(text, "target_stage", args.target_stage)
+    text = set_frontmatter(text, "completion_stage", completion)
+    save_contract(contract, text, journal)
+    return {"contract": str(contract), "target_stage": args.target_stage, "completion_stage": completion}
 
 
 def restore_one(entry: dict[str, object], target: Path) -> None:
@@ -626,9 +675,10 @@ def cmd_restore(args: argparse.Namespace) -> dict[str, object]:
         save_contract(contract, latest_text, journal)
         raise
     _, latest_text, _, _ = load_contract(str(contract))
-    latest_text = set_frontmatter(latest_text, "status", "ready_to_close")
+    latest_text = set_frontmatter(latest_text, "status", "restored")
+    journal.pop("closure", None)
     save_contract(contract, latest_text, journal)
-    return {"contract": str(contract), "status": "ready_to_close", "restored": restored_ids}
+    return {"contract": str(contract), "status": "restored", "restored": restored_ids}
 
 
 def verify_entry_chains(entries: list[dict[str, object]], writable_roots: list[str]) -> list[str]:
@@ -669,6 +719,75 @@ def verify_entry_chains(entries: list[dict[str, object]], writable_roots: list[s
     return issues
 
 
+def closure_fingerprint(text: str, journal: dict[str, object]) -> str:
+    journal = dict(journal)
+    journal.pop("closure", None)
+    normalized = replace_journal(set_frontmatter(text, "status", "executing"), journal)
+    return sha256(normalized.encode("utf-8"))
+
+
+def closure_evidence(
+    contract: Path, evidence_arg: str, frontmatter: dict[str, object], journal: dict[str, object]
+) -> dict[str, object]:
+    evidence_path = Path(evidence_arg).expanduser().absolute()
+    data, _ = read_regular_file(evidence_path)
+    if evidence_path.resolve() == contract:
+        raise ContractError("关闭证据必须保存在契约之外的验收载体")
+    try:
+        evidence = json.loads(data)
+    except (ValueError, UnicodeError) as exc:
+        raise ContractError("关闭证据必须为 JSON") from exc
+    if not isinstance(evidence, dict) or evidence.get("round_id") != frontmatter.get("round_id"):
+        raise ContractError("关闭证据 round_id 不匹配")
+    if evidence.get("remaining_work") != []:
+        raise ContractError("关闭证据必须明确 remaining_work: []；有剩余工作时保留契约")
+    outcome = evidence.get("outcome")
+    entries = journal["entries"]
+    if outcome == "completed":
+        completion = frontmatter.get("completion_stage")
+        if completion not in STAGES:
+            raise ContractError("缺少闭环终点；先用 scope 登记确认的 completion_stage")
+        if frontmatter["target_stage"] != completion:
+            raise ContractError("只达到本次执行上限，尚未到闭环终点；暂停并保留契约")
+        if evidence.get("completed_stage") != completion:
+            raise ContractError("关闭证据 completed_stage 未达到闭环终点")
+        if frontmatter["status"] not in {"executing", "ready_to_close"}:
+            raise ContractError("当前状态不能完成轮次")
+        if any(entry["status"] != "applied" for entry in entries):
+            raise ContractError("完成轮次要求全部变更已 applied")
+        required = list(STAGES[:STAGES.index(completion) + 1]) + ["residuals", "watermark", "absorption"]
+    elif outcome == "restored":
+        if frontmatter["status"] not in {"restored", "ready_to_close"}:
+            raise ContractError("先运行 restore 并复验基线")
+        if any(entry["status"] != "restored" for entry in entries):
+            raise ContractError("仍有未恢复的日志项")
+        required = ["baseline", "references", "absorption"]
+    else:
+        raise ContractError("关闭证据 outcome 必须为 completed 或 restored")
+    checks = evidence.get("checks")
+    if not isinstance(checks, dict):
+        raise ContractError("关闭证据缺少 checks")
+    files: dict[str, object] = {}
+    for name in dict.fromkeys(required + list(checks)):
+        check = checks.get(name)
+        if not isinstance(check, dict) or check.get("result") != "pass":
+            raise ContractError(f"关闭门槛未通过：{name}")
+        references = check.get("evidence")
+        if not isinstance(references, list) or not references:
+            raise ContractError(f"关闭门槛缺少证据文件：{name}")
+        for reference in references:
+            if not isinstance(reference, str) or not Path(reference).is_absolute():
+                raise ContractError(f"证据路径必须为绝对路径：{name}")
+            path = Path(reference)
+            if path.resolve() in {contract, evidence_path.resolve()}:
+                raise ContractError("门槛证据必须指向独立的权威产物或验收记录")
+            content, _ = read_regular_file(path)
+            if not content.strip():
+                raise ContractError(f"证据文件为空：{path}")
+            files[str(path)] = public_snapshot(snapshot(path))
+    return {"evidence_path": str(evidence_path), "evidence_sha256": sha256(data), "files": files}
+
+
 def cmd_verify(args: argparse.Namespace) -> dict[str, object]:
     contract, text, frontmatter, journal = load_contract(args.contract)
     require_schema(frontmatter, journal)
@@ -687,21 +806,50 @@ def cmd_verify(args: argparse.Namespace) -> dict[str, object]:
     issues.extend(verify_entry_chains(entries, list(journal["writable_roots"])))
     if any(entry.get("status") == "prepared" for entry in entries):
         issues.append("存在尚未 applied 的写前日志")
+    closure_issues: list[str] = []
+    if frontmatter["status"] == "ready_to_close":
+        certificate = journal.get("closure")
+        try:
+            if not isinstance(certificate, dict):
+                raise ContractError("缺少关闭证据登记；旧 ready_to_close 不能直接删除")
+            if certificate.get("fingerprint") != closure_fingerprint(text, journal):
+                raise ContractError("契约在关闭复核后发生变化，需重新复核")
+            current = closure_evidence(contract, str(certificate.get("evidence_path")), frontmatter, journal)
+            if any(certificate.get(key) != value for key, value in current.items()):
+                raise ContractError("关闭证据发生漂移，需重新验证")
+        except ContractError as exc:
+            closure_issues.append(str(exc))
     if args.mark_ready:
         if issues:
             raise ContractError("机械校验未通过，不能标记 ready_to_close")
-        if frontmatter["status"] != "executing":
+        if frontmatter["status"] not in {"executing", "restored"}:
             raise ContractError(f"当前状态不能标记 ready_to_close：{frontmatter['status']}")
+        if not args.evidence:
+            raise ContractError("需要 --evidence；机械 valid 不代表轮次完成")
+        certificate = closure_evidence(contract, args.evidence, frontmatter, journal)
+        certificate["fingerprint"] = closure_fingerprint(text, journal)
+        journal["closure"] = certificate
         text = set_frontmatter(text, "status", "ready_to_close")
-        write_contract(contract, text)
+        save_contract(contract, text, journal)
         frontmatter["status"] = "ready_to_close"
     return {
         "contract": str(contract),
         "status": frontmatter.get("status"),
         "valid": not issues,
         "issues": issues,
+        "close_ready": frontmatter["status"] == "ready_to_close" and not issues and not closure_issues,
+        "closure_issues": closure_issues,
         "entry_count": len(entries),
     }
+
+
+def cmd_close(args: argparse.Namespace) -> dict[str, object]:
+    result = cmd_verify(argparse.Namespace(contract=args.contract, mark_ready=False))
+    if not result["close_ready"]:
+        raise ContractError("关闭门槛未满足，保留契约：" + "; ".join(result["issues"] + result["closure_issues"]))
+    contract = Path(str(result["contract"]))
+    contract.unlink()
+    return {"contract": str(contract), "closed": True}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -712,6 +860,7 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("authority_root")
     init_parser.add_argument("--round-id")
     init_parser.add_argument("--target-stage", choices=STAGES, required=True)
+    init_parser.add_argument("--completion-stage", choices=STAGES, help="整轮闭环终点；省略时禁止正常关闭")
     init_parser.add_argument("--confirmed-at")
     init_parser.add_argument("--version-control", choices=("git", "none"), required=True)
     init_parser.add_argument("--baseline-ref")
@@ -733,8 +882,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     status_parser = subparsers.add_parser("status", help="查看或更新机械状态")
     status_parser.add_argument("contract")
-    status_parser.add_argument("--set", dest="set_status", choices=("executing", "blocked", "restoring"))
+    status_parser.add_argument("--set", dest="set_status", choices=("executing", "paused", "blocked", "restoring"))
     status_parser.set_defaults(handler=cmd_status)
+
+    scope_parser = subparsers.add_parser("scope", help="在同一轮次记录用户确认的执行上限和闭环终点")
+    scope_parser.add_argument("contract")
+    scope_parser.add_argument("--target-stage", choices=STAGES, required=True)
+    scope_parser.add_argument("--completion-stage", choices=STAGES)
+    scope_parser.add_argument("--confirmation", required=True)
+    scope_parser.add_argument("--writable-root", action="append", help="追加本次已明确授权的可写根")
+    scope_parser.set_defaults(handler=cmd_scope)
 
     restore_parser = subparsers.add_parser("restore", help="按逆序恢复本轮全部文件变更")
     restore_parser.add_argument("contract")
@@ -743,7 +900,12 @@ def build_parser() -> argparse.ArgumentParser:
     verify_parser = subparsers.add_parser("verify", help="校验 schema、日志链、哈希、权限和 Git 状态")
     verify_parser.add_argument("contract")
     verify_parser.add_argument("--mark-ready", action="store_true")
+    verify_parser.add_argument("--evidence", help="当前轮次的关闭证据 JSON 文件")
     verify_parser.set_defaults(handler=cmd_verify)
+
+    close_parser = subparsers.add_parser("close", help="重新核验关闭证据后显式删除契约")
+    close_parser.add_argument("contract")
+    close_parser.set_defaults(handler=cmd_close)
 
     return parser
 

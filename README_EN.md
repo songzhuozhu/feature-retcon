@@ -102,7 +102,7 @@ Append `--copy` when symlinks are unavailable. Omit `-g` for a project-scoped in
 | Channel | User entry point | How listing works |
 |---|---|---|
 | [skills.sh](https://skills.sh) | `npx skills add songzhuozhu/feature-retcon` | A public GitHub skill enters the leaderboard automatically after real Skills CLI installs |
-| [ClawHub](https://clawhub.ai) | `clawhub install @songzhuozhu/feature-retcon` | The repository workflow publishes independent versions; available after the first release |
+| [ClawHub](https://clawhub.ai) | `clawhub install @songzhuozhu/feature-retcon` | Published; use the CLI for explicit versions, or the workflow for dry-runs and automatic patch releases |
 
 ClawHub redistributes published skills under **MIT-0**. The manual workflow therefore requires an explicit license confirmation and a `CLAWHUB_TOKEN`; pull requests run a dry-run only.
 
@@ -127,6 +127,10 @@ Use the feature-retcon skill to perform a read-only assessment of this repositor
 On hosts with named invocation, you may also use their native syntax—for example, `$feature-retcon` in Codex. The cases below use natural language so they can be pasted into different agents unchanged.
 
 The first invocation reports authority evidence, change assertions, the artifact graph, conflicts, deletions, side effects, quantified stage options, and one recommendation—then stops. Only after confirmation does it create a local mode-`0600` `RECONCILIATION.md` and begin the `prepare → edit → applied` protocol.
+
+The execution limit controls how far this invocation may write; the completion stage controls when the round can close. A design checkpoint with stale implementation keeps the same contract and recovery journal.
+
+For v0.2.0 upgrades, preserve existing contracts and recovery journals; follow the [migration notes](CHANGELOG.md#020---2026-10-19) to add the completion stage and closing evidence.
 
 ## Three copy-ready golden cases
 
@@ -216,7 +220,8 @@ Do not reply with only “apply the recommendation.” Fill in the observed valu
 Based on the previous read-only assessment, I confirm this reconciliation round:
 
 - Change assertions: <superseded behavior, current target, invariants, exclusions>
-- Target stage: <requirements | design | tasks | implementation | validation>
+- Execution limit: <requirements | design | tasks | implementation | validation>
+- Completion stage: <cover affected downstream artifacts; does not authorize deeper work now>
 - Writable roots: <list each absolute path or explicit repository root>
 - Deletion manifest: <list each item; use “none” when empty>
 - Conflict handling: <preserve, include, or let me resolve first>
@@ -226,10 +231,10 @@ Based on the previous read-only assessment, I confirm this reconciliation round:
 Create the recovery contract and re-check the baseline before editing. Stop for renewed confirmation on any material scope expansion. Do not stage, commit, reset, or push Git automatically.
 ```
 
-If the assessment is not worth executing, or you need to abort an active round, paste this:
+For a pause or handoff, keep the same contract, round ID, recovery journal, and remaining-work record. To undo the round, paste this:
 
 ```text
-Stop this round. First report contract status and verify results. If writes exist, restore in reverse journal order and re-run the baseline. Do not use git reset, overwrite unregistered files, or touch unauthorized roots. Delete the round contract only after all close gates pass.
+Undo this round. First report contract status and verify results. If writes exist, restore in reverse journal order and re-run the baseline. Do not use git reset, overwrite unregistered files, or touch unauthorized roots. Use close only after restoration evidence passes the close gates.
 ```
 
 Each case was independently forward-tested in an isolated synthetic Git repository:
@@ -252,6 +257,7 @@ The repository currently has **32 automated tests** covering normal paths, fault
 | Sensitive blocks cannot jump to ready | Sensitive-signal state-machine regression |
 | Moving `HEAD` cannot move the recovery baseline | Commit-SHA freezing test |
 | Damaged journals fail safely | Structural validation and clean-error test |
+| Partial progress cannot close a round | Separate completion stage, evidence validation, and close-time rechecks |
 | Recovery contracts stay local | Mode `0600` and Git index checks |
 
 The recovery tool handles registered regular files only and never follows symlinks. Without Git, original bytes are stored locally as gzip + Base64. **Base64 is not encryption**; sensitive files require per-file confirmation.
@@ -264,6 +270,8 @@ The recovery tool handles registered regular files only and never follows symlin
 - It never initializes, stages, commits, resets, or pushes Git state.
 - External systems, hooks, side effects, and cross-repository writes require separate disclosure and confirmation.
 - Mechanical checks prove file/journal consistency; semantic completion still requires stage gates and residue checks.
+
+Closing checks validate evidence structure, file existence, and drift; they cannot prove semantic correctness or prevent direct deletion outside the script.
 
 These constraints are part of the safety model: precise boundaries make automation trustworthy.
 

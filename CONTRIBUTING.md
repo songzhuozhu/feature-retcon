@@ -46,7 +46,7 @@ npx skills add . --list
 两个渠道使用同一个 Git 提交作为来源：
 
 1. **skills.sh**：推送公共 GitHub 仓库后，用 `npx skills add songzhuozhu/feature-retcon` 完成一次真实安装。skills.sh 会根据 Skills CLI 的匿名安装遥测自动收录，不存在单独的“发布”按钮。
-2. **ClawHub**：先在 PR 中通过 `ClawHub Publish` dry-run；确认 `.clawhubignore` 只包含运行必需文件后，再配置仓库 Secret `CLAWHUB_TOKEN`，手动运行工作流并勾选 `confirm_mit0`。
+2. **ClawHub**：先运行 `clawhub skill publish . --owner songzhuozhu --slug feature-retcon --version <version> --dry-run --json`，确认 `.clawhubignore` 只包含运行必需文件。需要与 GitHub Release 使用相同版本时，使用已登录 CLI 显式传入 `--version`、`--source-repo`、`--source-commit`、`--source-ref` 和 `--source-path .` 发布。仓库工作流支持 PR 或手动 dry-run；自动补丁版本发布还需要 Secret `CLAWHUB_TOKEN`，并显式设置 `dry_run=false`、`confirm_mit0=true`。
 
 ClawHub 发布会把该渠道中的 Skill 版本置于 **MIT-0** 下，且不要求署名。这是一次真实的许可选择，不得绕过确认门禁或改成自动随 tag 发布。首次发布后，验证：
 

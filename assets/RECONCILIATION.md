@@ -4,6 +4,7 @@ round_id: {{ROUND_ID}}
 status: executing
 authority_root: {{AUTHORITY_ROOT}}
 target_stage: {{TARGET_STAGE}}
+completion_stage: {{COMPLETION_STAGE}}
 created_at: {{CREATED_AT}}
 confirmed_at: {{CONFIRMED_AT}}
 version_control: {{VERSION_CONTROL}}
@@ -42,7 +43,8 @@ baseline_ref: {{BASELINE_REF}}
 
 ## 目标与边界
 
-- 目标追平阶段：待填写。
+- 本次执行上限（target_stage）：待填写。
+- 整轮闭环终点（completion_stage）：待填写；达到执行上限不等于可以关闭。
 - 可写工作根：待填写。
 - 只读工作根：待填写。
 - 已确认删除：待填写。
@@ -83,14 +85,17 @@ baseline_ref: {{BASELINE_REF}}
 ## 执行记录与阻塞
 
 - 待填写每层结果、闭包补充、实质范围扩张和阻塞。
+- 阶段性暂停时记录：已完成、剩余工作、下次所需授权；保留本契约和原始恢复日志。
 
 ## 完成门槛
 
 - [ ] 变更断言已全部吸收。
-- [ ] 目标阶段及全部上游阶段已通过门槛。
-- [ ] 新需求可追踪到目标阶段。
+- [ ] 整轮闭环终点及全部上游阶段已通过门槛，剩余工作为零。
+- [ ] 新需求可追踪到闭环终点。
 - [ ] 所有残留签名命中均已解释。
 - [ ] 追平水位和阶段陈旧状态已更新。
 - [ ] 契约未被 Git 跟踪或暂存。
 - [ ] 恢复日志通过机械校验。
 - [ ] 本契约不再包含独有的有效要求。
+
+逐项填写证据依据。清单用于人工复核；脚本关闭还需要独立关闭证据，不能批量勾选代替验证。

@@ -5,7 +5,7 @@ description: 当用户需要推翻或修改一个已推进到需求、设计、�
 
 # 后悔药
 
-把用户确认的功能变更视为一次 **retcon**：重写当前权威态，而不是给旧结论追加补丁。每轮只追平到用户指定阶段，并以零未解释残留结束。
+把用户确认的功能变更视为一次 **retcon**：重写当前权威态，而不是给旧结论追加补丁。本次只推进到授权上限；整轮达到闭环终点并以零未解释残留通过验收后才关闭。
 
 ## 门禁
 
@@ -13,7 +13,8 @@ description: 当用户需要推翻或修改一个已推进到需求、设计、�
 - 只在用户明确确认变更断言、目标阶段、可写工作根、删除清单和已披露风险后修改文件。
 - 将未获授权的根保持只读。执行中发现实质范围扩张时暂停并重新确认。
 - 在每次修改、创建或删除目标文件前调用恢复脚本登记写前状态；登记成功后才执行该次修改。
-- 将契约存在视为未完成轮次。完成或恢复并通过全部门槛前保留契约。
+- 分开记录本次执行上限 `target_stage` 和整轮闭环终点 `completion_stage`。“先到设计”“下一步再实现”是阶段性暂停，保留同一契约、轮次和原始恢复日志。
+- 将契约存在视为未完成轮次。通过关闭证据校验后，用 `close` 显式关闭；不直接删除契约。
 - 保持终态式权威文档：当前有效产物只描述新目标，历史证据留在明确的历史载体中。
 
 ## 读取路线
@@ -22,6 +23,7 @@ description: 当用户需要推翻或修改一个已推进到需求、设计、�
 
 - 每次评估：读取 [assessment.md](references/assessment.md) 和 [stage-gates.md](references/stage-gates.md)。
 - 用户确认后、继续轮次或恢复轮次：读取 [contract-schema.md](references/contract-schema.md)。
+- 关闭轮次前：读取 [closure-evidence.md](references/closure-evidence.md)，逐项核对完成或恢复证据。
 - 目标包含任务阶段：读取 [task-rebuild.md](references/task-rebuild.md)。
 - 检测到项目规格工具、Hook 或多个工作根：读取 [spec-kit-adapter.md](references/spec-kit-adapter.md)。
 - 需要校准边界或解释编号规则：读取 [case-catalog.md](references/case-catalog.md)。
@@ -49,13 +51,14 @@ python3 <skill-dir>/scripts/contract.py verify <authority-root>/RECONCILIATION.m
 
 ## 步骤 3：锁定追平契约
 
-把用户确认的全部内容写入契约：被推翻行为、当前目标、保持不变、排除项、兼容与迁移影响、目标阶段、可写根、删除清单、冲突处置、Hook、副作用以及敏感或大载荷授权。
+把用户确认的全部内容写入契约：被推翻行为、当前目标、保持不变、排除项、兼容与迁移影响、执行上限、闭环终点、可写根、删除清单、冲突处置、Hook、副作用以及敏感或大载荷授权。
 
 用脚本创建契约：
 
 ```bash
 python3 <skill-dir>/scripts/contract.py init <authority-root> \
   --target-stage <stage> \
+  --completion-stage <stage> \
   --version-control <git|none> \
   --baseline-ref <ref> \
   --writable-root <root>
@@ -81,6 +84,8 @@ python3 <skill-dir>/scripts/contract.py applied <contract> --path <file>
 
 完成标准：目标阶段及全部上游阶段逐层通过 [stage-gates.md](references/stage-gates.md)；每次文件变更都有连续日志；依赖图、删除清单和验证结果与实际修改一致。
 
+达到执行上限但尚未达到闭环终点时，完成本次验证和水位更新，记录已完成、剩余工作和下次所需授权，运行 `status <contract> --set paused` 并结束本次调用。继续时在同一契约中登记新授权，保留原 `round_id` 和全部恢复日志。
+
 ## 步骤 5：验证当前权威态
 
 运行项目原生检查和确定性静态检查。扫描词法与行为残留签名，对每个命中分类为已替换、明确历史证据或与本轮无关。验证新需求能够沿依赖图追踪到目标阶段，并更新追平水位和阶段陈旧状态。
@@ -89,18 +94,19 @@ python3 <skill-dir>/scripts/contract.py applied <contract> --path <file>
 
 完成标准：所有必需验证通过或有证据证明失败既有且无关；残留签名零未解释命中；机械校验返回 `valid: true`。
 
-## 步骤 6：完成或恢复
+## 步骤 6：关闭或保留契约
 
-正常完成时，先确认契约的有效语义全部吸收到权威产物，再运行：
+正常完成时，先证明整轮闭环终点及全部上游门槛通过，且剩余工作为零；逐项核对并准备独立关闭证据，再运行：
 
 ```bash
-python3 <skill-dir>/scripts/contract.py verify <contract> --mark-ready
+python3 <skill-dir>/scripts/contract.py verify <contract> --mark-ready --evidence <closing-evidence.json>
+python3 <skill-dir>/scripts/contract.py close <contract>
 ```
 
-逐项复核契约完成门槛，然后显式删除契约。脚本不提供关闭或删除命令。
+机械 `valid: true` 只证明恢复日志一致；只有重新核验后的 `close_ready: true` 才允许关闭。清单勾选不能代替证据。
 
-用户停止未完成轮次时，运行 `restore`，复核恢复后的权威态与验证基线；只有状态为 `ready_to_close`、基线一致且没有半完成引用时，才删除契约。
+用户暂停或交接时保留契约。只有用户明确要求撤销本轮修改时运行 `restore`；它停在 `restored`，复验基线和引用后按恢复证据执行相同关闭命令。失败或证据不足时保留契约并报告阻塞。
 
 最后在对话中报告修改与删除数量、验证结果、残留扫描、追平水位、阶段陈旧状态和各工作根状态。不得自动初始化 Git、暂存、提交、重置、改写历史、推送或调用外部系统。
 
-完成标准：契约已经删除；指定阶段的权威态唯一、自洽、可验证且零未解释残留；未获授权的根和用户无关修改保持不变。
+完成标准：`close` 成功删除契约；闭环终点的权威态唯一、自洽、可验证且零未解释残留，或撤销后基线已复验；未获授权的根和用户无关修改保持不变。

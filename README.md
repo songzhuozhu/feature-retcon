@@ -105,7 +105,7 @@ npx skills add songzhuozhu/feature-retcon -g \
 | 渠道 | 用户入口 | 收录方式 |
 |---|---|---|
 | [skills.sh](https://skills.sh) | `npx skills add songzhuozhu/feature-retcon` | 公共 GitHub 仓库被用户通过 Skills CLI 安装后自动进入榜单 |
-| [ClawHub](https://clawhub.ai) | `clawhub install @songzhuozhu/feature-retcon` | 通过仓库内的发布工作流生成独立版本；首次发布后生效 |
+| [ClawHub](https://clawhub.ai) | `clawhub install @songzhuozhu/feature-retcon` | 已发布；显式版本通过 CLI 发布，工作流支持 dry-run 和自动补丁版本 |
 
 ClawHub 会把已发布 Skill 以 **MIT-0** 再分发。仓库的手动发布工作流因此要求显式勾选许可确认，并需要 `CLAWHUB_TOKEN`；普通 PR 只做 dry-run，不会发布。
 
@@ -137,7 +137,9 @@ git clone https://github.com/songzhuozhu/feature-retcon ~/.codex/skills/feature-
 4. 各目标阶段的量化影响与一个明确推荐。
 5. 等待用户确认的写入边界。
 
-确认后，Skill 才创建权限为 `0600` 的本地 `RECONCILIATION.md`，并通过 `prepare → 修改 → applied` 协议记录每次文件变化。你可以一次追平到实现，也可以分轮只追平需求、设计或任务。
+确认后，Skill 才创建权限为 `0600` 的本地 `RECONCILIATION.md`，并通过 `prepare → 修改 → applied` 协议记录每次文件变化。你可以一次追平到实现，也可以分段推进。执行上限决定这次能改到哪一层，闭环终点决定何时关闭；“先改设计、稍后改代码”会保留同一契约和恢复日志。
+
+升级到 v0.2.0 时，已有契约保留原轮次和恢复日志；按[变更日志](CHANGELOG.md#020---2026-10-19)补齐闭环终点和关闭证据。
 
 ## 三个可复制的黄金案例
 
@@ -214,12 +216,12 @@ git clone https://github.com/songzhuozhu/feature-retcon ~/.codex/skills/feature-
 - 把外部系统调用和不可逆操作保持为未授权；
 - 评估失败关闭、旧链接拒绝、审计保留和回归测试；
 - 说明若执行中发现范围扩张，怎样阻塞并等待重新确认；
-- 说明我停止本轮时，怎样用本地契约逆序恢复并验证前态。
+- 说明我撤销本轮修改时，怎样用本地契约逆序恢复并验证前态。
 
 第一次调用严格只读。不得调用外部系统，不得修改 Git 状态，不得提前执行吊销或迁移。
 ```
 
-你应该看到：删除项、外部副作用和恢复路径被拆开确认；“停止本轮”不会被解释成 `git reset` 或粗暴覆盖工作树。
+你应该看到：删除项、外部副作用和恢复路径被拆开确认；暂停保留契约，撤销通过契约恢复，不使用 `git reset` 或粗暴覆盖工作树。
 
 </details>
 
@@ -233,7 +235,8 @@ git clone https://github.com/songzhuozhu/feature-retcon ~/.codex/skills/feature-
 根据上一轮只读评估，我确认执行本轮追平：
 
 - 变更断言：<被推翻行为、当前目标、保持不变、排除项>
-- 目标阶段：<requirements | design | tasks | implementation | validation>
+- 本次执行上限：<requirements | design | tasks | implementation | validation>
+- 整轮闭环终点：<覆盖受影响下游；不会自动授权本次执行更深阶段>
 - 可写工作根：<逐项列出绝对路径或明确仓库根>
 - 删除清单：<逐项列出；没有则写“无”>
 - 冲突处置：<保留、纳入或先由我处理>
@@ -243,10 +246,10 @@ git clone https://github.com/songzhuozhu/feature-retcon ~/.codex/skills/feature-
 先创建恢复契约并复验基线，再逐层修改。任何实质范围扩张都必须停止并重新确认；不得自动暂存、提交、重置或推送 Git。
 ```
 
-如果评估结果不值得继续，或执行中想撤退，复制这一段：
+若只想暂停或交接，要求保留契约、原轮次和恢复日志，记录剩余工作。若决定撤销本轮修改，复制这一段：
 
 ```text
-停止本轮。先报告当前契约状态和 verify 结果；若已有写入，按契约逆序恢复并复验基线。不得使用 git reset、覆盖未登记文件或触碰未授权工作根。恢复满足关闭门槛后，再删除本轮契约。
+撤销本轮修改。先报告当前契约状态和 verify 结果；若已有写入，按契约逆序恢复并复验基线。不得使用 git reset、覆盖未登记文件或触碰未授权工作根。恢复证据通过后，再用 close 关闭契约。
 ```
 
 三个案例已分别在隔离的合成 Git 仓库中完成独立 forward-test：
@@ -269,17 +272,19 @@ git clone https://github.com/songzhuozhu/feature-retcon ~/.codex/skills/feature-
 | 新敏感内容不能绕过阻塞直接关闭 | 敏感信号与状态机回归测试 |
 | `HEAD` 移动不会改变恢复基线 | Git 引用冻结为不可变 commit SHA 测试 |
 | 损坏日志不会变成未捕获异常 | 日志结构校验与安全错误测试 |
+| 阶段性完成不会提前关闭 | 独立闭环终点、关闭证据校验及 close 复核 |
 | 临时契约不会被意外提交 | `0600` 权限与 Git 索引检查 |
 
 恢复脚本只处理已登记的常规文件，不跟随符号链接。Git 不可用时，原始字节会以 gzip + Base64 写入本地契约；**Base64 不是加密**，敏感文件必须逐文件确认。
 
 ## 清晰的边界
 
-为了让承诺可以被证明，v0.1.0 主动限制了范围：
+为了让承诺可以被证明，当前版本限定以下范围：
 
 - Skill 核心只使用共享 `SKILL.md` 约定；`agents/openai.yaml` 仅提供 Codex 展示元数据，不是运行依赖。
 - 七个列出的宿主均已通过隔离的 Skills CLI 安装测试；Codex 另有行为级 forward-test，其他宿主尚待独立行为验证。
 - 恢复保证针对已登记常规文件的字节与权限，不递归快照或自动删除目录。
+- 关闭检查验证证据结构、文件存在性和漂移，不能判断语义结论真实，也不能阻止绕过脚本直接删除契约。
 - 不自动初始化、暂存、提交、重置或推送 Git。
 - 不自动调用外部系统；Hook、副作用和跨仓库写入都需要单独披露与确认。
 - 机械校验只能证明文件与日志一致；语义完成仍必须通过阶段门槛和残留检查。

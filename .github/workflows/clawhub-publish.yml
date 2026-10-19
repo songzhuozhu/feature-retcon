@@ -11,6 +11,11 @@ on:
       - ".github/workflows/clawhub-publish.yml"
   workflow_dispatch:
     inputs:
+      dry_run:
+        description: "Preview the bundle without publishing"
+        required: true
+        default: true
+        type: boolean
       confirm_mit0:
         description: "I confirm this skill release will be distributed by ClawHub under MIT-0"
         required: true
@@ -23,16 +28,16 @@ permissions:
 
 jobs:
   dry-run:
-    if: github.event_name == 'pull_request'
-    uses: openclaw/clawhub/.github/workflows/skill-publish.yml@v1
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == true)
+    uses: openclaw/clawhub/.github/workflows/skill-publish.yml@433251e124a6ec0c5fef5dee05a64c1603a75344
     with:
       skill_path: .
       owner: songzhuozhu
       dry_run: true
 
   publish:
-    if: github.event_name == 'workflow_dispatch' && inputs.confirm_mit0 == true
-    uses: openclaw/clawhub/.github/workflows/skill-publish.yml@v1
+    if: github.event_name == 'workflow_dispatch' && inputs.dry_run == false && inputs.confirm_mit0 == true
+    uses: openclaw/clawhub/.github/workflows/skill-publish.yml@433251e124a6ec0c5fef5dee05a64c1603a75344
     with:
       skill_path: .
       owner: songzhuozhu
